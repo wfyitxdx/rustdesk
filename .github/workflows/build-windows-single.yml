@@ -1,62 +1,73 @@
-name: Build Windows Single File RustDesk
+name: Build RustDesk Multi-Platform
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ master, main ]
+    branches: [ master ]
+  pull_request:
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: Build (${{ matrix.os }} / ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows — 2010年后 CPU 通用架构
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+          # Linux — x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          # Linux — ARM64（树莓派4、服务器）
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+
+          # macOS ARM (M1 / M2 / M3)
+          - os: macos-latest
+            target: aarch64-apple-darwin
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
+          targets: ${{ matrix.target }}
 
-      # --- vcpkg manifest 模式（RustDesk 必须用这种） ---
-      - name: Install vcpkg
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
         run: |
-          git clone https://github.com/microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
+          sudo apt update
+          sudo apt install -y build-essential libgtk-3-dev libx11-dev
 
-      - name: Install dependencies (manifest)
+      - name: Build App
         run: |
-          .\vcpkg\vcpkg install --triplet x64-windows-static
+          cargo build --release --target ${{ matrix.target }}
 
-      # -------------------------
-      #    Build RustDesk
-      # -------------------------
-      - name: Build RustDesk portable
+      # ⭐ Windows 单文件 EXE 打包（RustDesk 官方方式）
+      - name: Make Windows single-file EXE
+        if: runner.os == 'Windows'
         run: |
-          python build.py --portable --flutter
-        shell: powershell
+          echo "🔧 Building portable single executable"
+          rustup target add ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} --features portable
+          # 输出到 dist/
+          mkdir dist
+          copy target\${{ matrix.target }}\release\rustdesk.exe dist\rustdesk-portable.exe
 
-      # -------------------------
-      #    生成单文件 SFX
-      # -------------------------
-      - name: Install 7zip
-        run: choco install 7zip -y
-
-      - name: Build SFX Config
-        run: |
-          echo ;!@Install@!UTF-8! > config.txt
-          echo RunProgram="rustdesk.exe" >> config.txt
-          echo GUIMode="2" >> config.txt
-          echo ;!@InstallEnd@! >> config.txt
-
-      - name: Pack to Single EXE
-        run: |
-          cd flutter\build\windows\x64\runner\Release
-          7z a app.7z * -mx9
-          copy /b "C:\Program Files\7-Zip\7z.sfx" + ..\..\..\..\..\config.txt + app.7z rustdesk_single.exe
-
-      - name: Upload Single File EXE
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-windows-single-file
-          path: flutter/build/windows/x64/runner/Release/rustdesk_single.exe
+          name: rustdesk-${{ matrix.os }}-${{ matrix.target }}
+          path: |
+            dist/**
+            target/${{ matrix.target }}/release/*
