@@ -1,106 +1,122 @@
-name: Build RustDesk Multi-Platform
+name: Build RustDesk Multi‑Platform
 
 on:
   push:
     branches: [ master ]
   pull_request:
+    branches: [ master ]
 
 jobs:
   build:
-    name: Build (${{ matrix.os }} / ${{ matrix.target }})
+    name: Build for ${{ matrix.os }} / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Windows x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
 
+          # Linux x64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
 
+          # Linux ARM64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
 
+          # macOS x64
           - os: macos-latest
             target: x86_64-apple-darwin
 
+          # macOS ARM64 (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
 
+    env:
+      # 可根据需要设定
+      RUSTFLAGS: "-C target-cpu=native"
+      # 你可以添加默认 server / key 配置环境变量
+      # DEFAULT_RENDEZVOUS_SERVER: ${{ secrets.DEFAULT_RENDEZVOUS_SERVER }}
+      # DEFAULT_RS_PUB_KEY: ${{ secrets.DEFAULT_RS_PUB_KEY }}
+
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      # ---------------------------
-      # Setup Flutter
-      # ---------------------------
+      # 如果项目用了子模块或 subrepo，请加
+      # - name: Update submodules
+      #   run: git submodule update --init --recursive
+
+      # --- Flutter setup ---
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
 
-      - name: Flutter Pub Get
+      - name: Flutter pub get
+        working-directory: flutter
         run: flutter pub get
 
-      # ---------------------------
-      # Install System Dependencies
-      # ---------------------------
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
+      # --- System deps per OS ---
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt install -y \
             build-essential cmake ninja-build pkg-config \
-            libgtk-3-dev libx11-dev libxext-dev libxcb1-dev \
-            libglu1-mesa-dev libgl1-mesa-dev
+            libgtk-3-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libasound2-dev libpulse-dev \
+            libglu1-mesa-dev libgl1-mesa-dev \
+            nasm yasm
 
-      - name: Install macOS dependencies
-        if: matrix.os == 'macos-latest'
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macos-latest'
         run: |
+          brew update
           brew install cmake ninja pkg-config glfw gtk+3
 
-      - name: Install Windows dependencies
-        if: matrix.os == 'windows-latest'
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
         run: |
           choco install -y cmake ninja git
           git clone https://github.com/microsoft/vcpkg.git
-          cd vcpkg
-          bootstrap-vcpkg.bat
-          vcpkg integrate install
+          .\\vcpkg\\bootstrap-vcpkg.bat
+          .\\vcpkg\\vcpkg integrate install
+          # 可指定静态 triplet
+          .\\vcpkg\\vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
 
-      # ---------------------------
-      # Rust Toolchain
-      # ---------------------------
-      - name: Install Rust
+      # --- Rust toolchain setup ---
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      # ---------------------------
-      # Build RustDesk
-      # ---------------------------
-      - name: Build RustDesk
-        run: cargo build --release --target ${{ matrix.target }}
+      # --- Build Rust backend + Flutter frontend ---
+      - name: Build RustDesk (Rust + Flutter)
+        run: |
+          # 生成 Flutter‑Rust bridge
+          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/${{ matrix.os == 'macos-latest' && 'macos' || matrix.os == 'Windows' && 'windows' || 'linux'}}/Runner/bridge_generated.h
+          # 编译 Rust 后端 + Flutter 前端
+          python ./build.py --flutter
+        shell: bash
 
-      # ---------------------------
-      # Windows 单文件 EXE
-      # ---------------------------
-      - name: Make Windows Portable EXE
-        if: matrix.os == 'windows-latest'
+      # --- Windows: 生成单文件 Portable EXE ---
+      - name: Build Windows portable EXE
+        if: runner.os == 'Windows'
         run: |
           cargo build --release --target ${{ matrix.target }} --features portable
           mkdir dist
-          copy target\${{ matrix.target }}\release\rustdesk.exe dist\rustdesk-portable.exe
+          copy target\\${{ matrix.target }}\\release\\rustdesk.exe dist\\rustdesk-portable.exe
 
-      # ---------------------------
-      # Upload Artifact
-      # ---------------------------
-      - name: Upload Build Artifacts
+      # --- Upload artifacts ---
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-${{ matrix.os }}-${{ matrix.target }}
           path: |
             dist/**
+            flutter/build/**/*
             target/${{ matrix.target }}/release/**
