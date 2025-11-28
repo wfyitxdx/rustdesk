@@ -1,0 +1,55 @@
+name: Build Windows Single File RustDesk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, main ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install MSVC dependencies
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+
+      - name: Build RustDesk portable
+        run: |
+          python build.py --portable --flutter
+        shell: powershell
+
+      # -------------------------
+      #  🔥 生成单文件 RustDesk EXE
+      # -------------------------
+      - name: Install 7-Zip
+        run: choco install 7zip -y
+
+      - name: Create SFX config
+        run: |
+          echo ;!@Install@!UTF-8! > config.txt
+          echo RunProgram="rustdesk.exe" >> config.txt
+          echo GUIMode="2" >> config.txt
+          echo ;!@InstallEnd@! >> config.txt
+
+      - name: Make SFX Single EXE
+        run: |
+          cd flutter\build\windows\x64\runner\Release
+          7z a app.7z * -mx9
+          copy /b "C:\Program Files\7-Zip\7z.sfx" + ..\..\..\..\..\config.txt + app.7z rustdesk_single.exe
+
+      - name: Upload Single File EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-windows-single-file
+          path: flutter/build/windows/x64/runner/Release/rustdesk_single.exe
