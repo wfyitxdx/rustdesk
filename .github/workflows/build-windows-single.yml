@@ -14,23 +14,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows — 2010年后 CPU 通用架构
           - os: windows-latest
             target: x86_64-pc-windows-msvc
 
-          # Linux — x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
 
-          # Linux — ARM64（树莓派4、服务器）
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
 
-          # macOS Intel
           - os: macos-latest
             target: x86_64-apple-darwin
 
-          # macOS ARM (M1 / M2 / M3)
           - os: macos-latest
             target: aarch64-apple-darwin
 
@@ -38,36 +33,74 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      # ---------------------------
+      # Setup Flutter
+      # ---------------------------
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      # ---------------------------
+      # Install System Dependencies
+      # ---------------------------
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential cmake ninja-build pkg-config \
+            libgtk-3-dev libx11-dev libxext-dev libxcb1-dev \
+            libglu1-mesa-dev libgl1-mesa-dev
+
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install cmake ninja pkg-config glfw gtk+3
+
+      - name: Install Windows dependencies
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install -y cmake ninja git
+          git clone https://github.com/microsoft/vcpkg.git
+          cd vcpkg
+          bootstrap-vcpkg.bat
+          vcpkg integrate install
+
+      # ---------------------------
+      # Rust Toolchain
+      # ---------------------------
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential libgtk-3-dev libx11-dev
+      # ---------------------------
+      # Build RustDesk
+      # ---------------------------
+      - name: Build RustDesk
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build App
+      # ---------------------------
+      # Windows 单文件 EXE
+      # ---------------------------
+      - name: Make Windows Portable EXE
+        if: matrix.os == 'windows-latest'
         run: |
-          cargo build --release --target ${{ matrix.target }}
-
-      # ⭐ Windows 单文件 EXE 打包（RustDesk 官方方式）
-      - name: Make Windows single-file EXE
-        if: runner.os == 'Windows'
-        run: |
-          echo "🔧 Building portable single executable"
-          rustup target add ${{ matrix.target }}
           cargo build --release --target ${{ matrix.target }} --features portable
-          # 输出到 dist/
           mkdir dist
           copy target\${{ matrix.target }}\release\rustdesk.exe dist\rustdesk-portable.exe
 
-      - name: Upload artifact
+      # ---------------------------
+      # Upload Artifact
+      # ---------------------------
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-${{ matrix.os }}-${{ matrix.target }}
           path: |
             dist/**
-            target/${{ matrix.target }}/release/*
+            target/${{ matrix.target }}/release/**
