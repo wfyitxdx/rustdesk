@@ -18,31 +18,38 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Install MSVC dependencies
+      # --- vcpkg manifest 模式（RustDesk 必须用这种） ---
+      - name: Install vcpkg
         run: |
           git clone https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
 
+      - name: Install dependencies (manifest)
+        run: |
+          .\vcpkg\vcpkg install --triplet x64-windows-static
+
+      # -------------------------
+      #    Build RustDesk
+      # -------------------------
       - name: Build RustDesk portable
         run: |
           python build.py --portable --flutter
         shell: powershell
 
       # -------------------------
-      #  🔥 生成单文件 RustDesk EXE
+      #    生成单文件 SFX
       # -------------------------
-      - name: Install 7-Zip
+      - name: Install 7zip
         run: choco install 7zip -y
 
-      - name: Create SFX config
+      - name: Build SFX Config
         run: |
           echo ;!@Install@!UTF-8! > config.txt
           echo RunProgram="rustdesk.exe" >> config.txt
           echo GUIMode="2" >> config.txt
           echo ;!@InstallEnd@! >> config.txt
 
-      - name: Make SFX Single EXE
+      - name: Pack to Single EXE
         run: |
           cd flutter\build\windows\x64\runner\Release
           7z a app.7z * -mx9
